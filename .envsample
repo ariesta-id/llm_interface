@@ -1,2 +1,5 @@
-LLM_API_URL=https://api.fireworks.ai/inference/v1
-LLM_API_KEY=fw-yoursecretkey
+# Pick one API URL and uncomment it
+# LLM_API_URL=https://api.fireworks.ai/inference/v1
+# LLM_API_URL=https://openrouter.ai/api/v1
+# LLM_API_URL=https://router.huggingface.co/v1
+LLM_API_KEY=your-secret-key

@@ -8,8 +8,10 @@
 from openai import OpenAI
 import numpy as np
 import os
+import warnings
 
-MODEL = "accounts/fireworks/models/deepseek-v3-0324"
+MODEL = "deepseek-ai/DeepSeek-V4.1-Flash-1017"
+# MODEL = "accounts/fireworks/models/deepseek-v3-0324"
 # MODEL = "accounts/fireworks/models/llama-v3p1-405b-instruct"
 # MODEL = "accounts/fireworks/models/qwen2p5-72b-instruct"
 
@@ -51,7 +53,16 @@ def get_llm_response(messages, **kwargs):
         prompt_token = chat_completion.usage.prompt_tokens
         completion_token = chat_completion.usage.completion_tokens
         if kwargs.get("logprobs", False):
-            top_tokens = chat_completion.choices[0].logprobs.content[0].top_logprobs
+            logprobs = chat_completion.choices[0].logprobs
+            # Logprobs are optional: some providers/models don't return them.
+            if logprobs is None or not logprobs.content:
+                warnings.warn(
+                    "logprobs were requested but not returned by the API/provider; "
+                    "returning None for first_token, first_logprob and first_prob.",
+                    stacklevel=2,
+                )
+                return message_content, prompt_token, completion_token, None, None, None
+            top_tokens = logprobs.content[0].top_logprobs
             first_token = top_tokens[0].token
             first_logprob = top_tokens[0].logprob
             first_prob = np.round(np.exp(first_logprob) * 100, 2)
