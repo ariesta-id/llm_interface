@@ -7,7 +7,10 @@
 # ///
 from openai import OpenAI
 import numpy as np
+import base64
+import mimetypes
 import os
+import urllib.request
 import warnings
 
 MODEL = "deepseek-ai/DeepSeek-V4.1-Flash-1017"
@@ -197,6 +200,101 @@ def get_llm_response_with_meta(messages, **kwargs):
         _unpack_response(chat_completion, kwargs.get("logprobs", False)),
         get_llm_metadata(chat_completion),
     )
+
+
+MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB; larger images are blocked unless allow_large=True
+_IMAGE_MIME_TYPES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+}
+
+
+class ImageTooLargeError(ValueError):
+    """Raised when an image exceeds `MAX_IMAGE_BYTES` and `allow_large` is False."""
+
+
+def _check_image_size(source, size_bytes, allow_large):
+    if allow_large or size_bytes is None or size_bytes <= MAX_IMAGE_BYTES:
+        return
+    raise ImageTooLargeError(
+        f"Image '{source}' is {size_bytes / 1024 / 1024:.1f} MB, above the "
+        f"{MAX_IMAGE_BYTES / 1024 / 1024:.0f} MB limit. The request was NOT sent.\n"
+        "WARNING: large images have not been tested with this model, and may not be "
+        "optimal for the model's capability (higher cost, provider request limits, "
+        "or worse results). Consider downscaling/compressing the image first.\n"
+        "If you still want to send it, pass allow_large=True, e.g. "
+        "user_message(text, image, allow_large=True)."
+    )
+
+
+def image_part(image, detail=None, allow_large=False):
+    """Build an OpenAI-style `image_url` content part from a local path or URL.
+
+    Args:
+    image: Local file path (.jpg/.jpeg/.png/.webp/.gif) or an http(s):// URL.
+        Local files are base64-encoded into a data URL. URLs are passed through
+        as-is (the provider fetches them; nothing is downloaded here).
+    detail: Optional "low" | "high" | "auto" hint. Providers may ignore it.
+    allow_large: Bypass the size guard (`MAX_IMAGE_BYTES`). Large images are
+        untested and may be suboptimal for the model.
+
+    Size guard: local files are checked by byte size. For URLs a best-effort HTTP
+    HEAD request reads `Content-Length`; if that is unavailable the URL is NOT
+    size-checked. Image pixel dimensions are not checked.
+
+    Raises:
+    ImageTooLargeError: If the image is over `MAX_IMAGE_BYTES` and not allow_large.
+    ValueError: For unsupported file types.
+    FileNotFoundError: If a local path does not exist.
+    """
+    if str(image).startswith(("http://", "https://")):
+        size = None
+        try:
+            req = urllib.request.Request(image, method="HEAD")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                length = resp.headers.get("Content-Length")
+                size = int(length) if length else None
+        except Exception:
+            pass  # best effort only; the provider fetches the URL itself
+        _check_image_size(image, size, allow_large)
+        url = image
+    else:
+        ext = os.path.splitext(str(image))[1].lower()
+        mime = _IMAGE_MIME_TYPES.get(ext) or mimetypes.guess_type(str(image))[0]
+        if mime not in _IMAGE_MIME_TYPES.values():
+            raise ValueError(
+                f"Unsupported image type '{ext}'. "
+                f"Supported: {', '.join(sorted(_IMAGE_MIME_TYPES))}"
+            )
+        _check_image_size(image, os.path.getsize(image), allow_large)
+        with open(image, "rb") as f:
+            url = f"data:{mime};base64,{base64.b64encode(f.read()).decode()}"
+
+    image_url = {"url": url}
+    if detail is not None:
+        image_url["detail"] = detail
+    return {"type": "image_url", "image_url": image_url}
+
+
+def user_message(text, *images, detail=None, allow_large=False):
+    """Build a user message with text and optional images.
+
+    Example:
+        messages = [user_message("What's in this image?", "image-test.jpg")]
+        get_llm_response(messages)
+
+    Args:
+    text: The prompt text.
+    *images: Local image paths and/or https URLs (see `image_part`).
+    detail: Optional "low" | "high" | "auto" hint applied to every image.
+    allow_large: Bypass the image size guard (untested; see `image_part`).
+    """
+    content = [{"type": "text", "text": text}]
+    content += [image_part(i, detail=detail, allow_large=allow_large) for i in images]
+    return {"role": "user", "content": content}
 
 
 # Example usage
